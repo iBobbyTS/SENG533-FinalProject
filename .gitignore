@@ -1,0 +1,14 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+.cache/
+.idea/
+.venv*/
+
+cache/
+data/
+external/
+results/
+screenshots/
+
