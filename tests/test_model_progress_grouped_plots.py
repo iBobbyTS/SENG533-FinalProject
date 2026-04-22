@@ -7,10 +7,13 @@ from pathlib import Path
 
 from benchmark_suite.model_progress_grouped_plots import (
     BenchmarkPoint,
+    apply_benchmark_overrides,
     find_row,
+    load_benchmark_overrides,
     load_benchmark_points,
     load_truncation_index,
     parse_model_progress_markdown,
+    resolve_summary_path,
     transpose_group_series,
 )
 
@@ -75,6 +78,80 @@ class ModelProgressGroupedPlotsTests(unittest.TestCase):
         self.assertEqual(points["mmlu_pro"].truncated_rows, 3)
         self.assertIsNone(points["vqa"].score_percent)
         self.assertEqual(points["vqa"].status, "failed")
+
+    def test_load_benchmark_points_accepts_single_benchmark_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            summary_path = root / "mbpp" / "summary.json"
+            summary_path.parent.mkdir()
+            summary_path.write_text(
+                json.dumps({"benchmark": "mbpp", "status": "completed", "score": 0.76}),
+                encoding="utf-8",
+            )
+
+            points = load_benchmark_points(summary_path, {})
+
+        self.assertEqual(points["mbpp"].score_percent, 76.0)
+        self.assertEqual(points["mbpp"].status, "completed")
+
+    def test_apply_benchmark_overrides_replaces_only_matching_benchmark(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            aggregate_summary = root / "aggregate_summary.json"
+            aggregate_summary.write_text(
+                json.dumps(
+                    {
+                        "benchmarks": [
+                            {"benchmark": "mbpp", "status": "completed", "score": 0.0},
+                            {"benchmark": "vqa", "status": "completed", "score": 0.7},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            override_summary = root / "rerun" / "summary.json"
+            override_summary.parent.mkdir()
+            override_summary.write_text(
+                json.dumps({"benchmark": "mbpp", "status": "completed", "score": 0.76}),
+                encoding="utf-8",
+            )
+            override_path = root / "overrides.json"
+            override_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "params": "27B",
+                            "quantization": "Q4_K_M",
+                            "notes": "Dense model",
+                            "benchmark": "mbpp",
+                            "summary_path": "rerun/summary.json",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            row = parse_model_progress_markdown(
+                self._write_markdown(root / "progress.md", [("27B", "Q4_K_M", "Dense model", aggregate_summary)])
+            )[0]
+
+            points = load_benchmark_points(aggregate_summary, {})
+            overrides = load_benchmark_overrides(override_path)
+            updated = apply_benchmark_overrides(row, points, overrides, {})
+
+        self.assertEqual(updated["mbpp"].score_percent, 76.0)
+        self.assertEqual(updated["vqa"].score_percent, 70.0)
+
+    def test_resolve_summary_path_finds_moved_result_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            stale_path = root / "results" / "run_1" / "summary.json"
+            moved_path = root / "results" / "inteligence_benchmark" / "run_1" / "summary.json"
+            moved_path.parent.mkdir(parents=True)
+            moved_path.write_text("{}", encoding="utf-8")
+
+            resolved = resolve_summary_path(stale_path, [root / "results" / "inteligence_benchmark"])
+
+        self.assertEqual(resolved, moved_path)
 
     def test_find_row_distinguishes_same_params_and_quant_by_notes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

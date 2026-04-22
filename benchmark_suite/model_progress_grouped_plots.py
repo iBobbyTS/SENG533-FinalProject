@@ -51,6 +51,15 @@ class BenchmarkPoint:
     truncated_rows: int
 
 
+@dataclass(frozen=True)
+class BenchmarkOverride:
+    params: str
+    quantization: str
+    notes: str
+    benchmark: str
+    summary_path: Path
+
+
 def parse_model_progress_markdown(path: Path) -> list[ModelProgressRow]:
     rows: list[ModelProgressRow] = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -93,11 +102,65 @@ def load_truncation_index(path: Path) -> dict[tuple[str, str], int]:
     return index
 
 
-def load_benchmark_points(summary_path: Path, truncation_index: dict[tuple[str, str], int]) -> dict[str, BenchmarkPoint]:
+def load_benchmark_overrides(path: Path) -> dict[tuple[str, str, str, str], BenchmarkOverride]:
+    if not path.exists():
+        return {}
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    overrides: dict[tuple[str, str, str, str], BenchmarkOverride] = {}
+    for row in rows:
+        summary_path = Path(row["summary_path"])
+        if not summary_path.is_absolute():
+            summary_path = (path.parent / summary_path).resolve()
+        override = BenchmarkOverride(
+            params=str(row["params"]),
+            quantization=str(row["quantization"]),
+            notes=str(row["notes"]),
+            benchmark=str(row["benchmark"]),
+            summary_path=summary_path,
+        )
+        overrides[(override.params, override.quantization, override.notes, override.benchmark)] = override
+    return overrides
+
+
+def resolve_summary_path(summary_path: Path, search_roots: list[Path]) -> Path:
+    if summary_path.exists():
+        return summary_path
+    if not summary_path.is_absolute():
+        return summary_path
+    parts = summary_path.parts
+    try:
+        results_index = parts.index("results")
+    except ValueError:
+        return summary_path
+    if results_index + 1 >= len(parts):
+        return summary_path
+
+    run_relative = Path(*parts[results_index + 1 :])
+    for root in search_roots:
+        candidate = root / run_relative
+        if candidate.exists():
+            return candidate
+    return summary_path
+
+
+def _summary_benchmarks(summary: dict) -> list[dict]:
+    benchmarks = summary.get("benchmarks")
+    if isinstance(benchmarks, list):
+        return benchmarks
+    if "benchmark" in summary:
+        return [summary]
+    return []
+
+
+def load_benchmark_points(
+    summary_path: Path,
+    truncation_index: dict[tuple[str, str], int],
+    truncation_summary_path: Path | None = None,
+) -> dict[str, BenchmarkPoint]:
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    summary_key = str(summary_path.resolve())
+    summary_key = str((truncation_summary_path or summary_path).resolve())
     points: dict[str, BenchmarkPoint] = {}
-    for benchmark in summary.get("benchmarks", []):
+    for benchmark in _summary_benchmarks(summary):
         name = benchmark["benchmark"]
         raw_score = benchmark.get("score")
         score_percent = None if raw_score is None else float(raw_score) * 100.0
@@ -108,6 +171,22 @@ def load_benchmark_points(summary_path: Path, truncation_index: dict[tuple[str, 
             truncated_rows=truncation_index.get((summary_key, name), 0),
         )
     return points
+
+
+def apply_benchmark_overrides(
+    row: ModelProgressRow,
+    points: dict[str, BenchmarkPoint],
+    overrides: dict[tuple[str, str, str, str], BenchmarkOverride],
+    truncation_index: dict[tuple[str, str], int],
+) -> dict[str, BenchmarkPoint]:
+    updated = dict(points)
+    for benchmark in BENCHMARK_ORDER:
+        override = overrides.get((row.params, row.quantization, row.notes, benchmark))
+        if override is None:
+            continue
+        override_points = load_benchmark_points(override.summary_path, truncation_index)
+        updated[benchmark] = override_points[benchmark]
+    return updated
 
 
 def find_row(rows: list[ModelProgressRow], params: str, quantization: str, notes: str) -> ModelProgressRow:

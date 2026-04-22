@@ -29,7 +29,12 @@ class PlotModelProgressGroupsScriptTests(unittest.TestCase):
         self.assertEqual(groups[-1][0], "05_ultra_low_quantization")
 
     def test_default_output_directory_name(self) -> None:
-        self.assertEqual(self.module.DEFAULT_OUT_DIR.name, "20260330_model_progress_grouped_plots")
+        self.assertEqual(self.module.DEFAULT_OUT_DIR.name, "grouped_plots")
+        self.assertEqual(self.module.DEFAULT_OUT_DIR.parent.name, "inteligence_benchmark")
+
+    def test_default_benchmark_overrides_path(self) -> None:
+        self.assertEqual(self.module.DEFAULT_BENCHMARK_OVERRIDES.name, "benchmark_overrides.json")
+        self.assertEqual(self.module.DEFAULT_BENCHMARK_OVERRIDES.parent, self.module.DEFAULT_OUT_DIR)
 
     def test_group_labels_use_short_model_codes(self) -> None:
         self.assertEqual([item[0] for item in self.module.GROUPS[0][2]], ["4B", "9B", "27B"])

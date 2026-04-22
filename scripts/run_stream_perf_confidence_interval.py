@@ -18,6 +18,7 @@ DEFAULT_BASE_URL = "http://127.0.0.1:1234/api/v1"
 DEFAULT_CONTEXTS = [32768]
 DEFAULT_RUNS = 5
 DEFAULT_MAX_OUTPUT_TOKENS = 32768
+DEFAULT_TEMPERATURE = 0.0
 DEFAULT_IDLE_TIMEOUT_SECONDS = 600
 DEFAULT_SNAPSHOT_INTERVAL_SECONDS = 60
 DEFAULT_CONFIDENCE_LEVEL = 0.95
@@ -96,6 +97,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--contexts", nargs="+", type=int, default=DEFAULT_CONTEXTS)
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
     parser.add_argument("--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS)
+    parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
     parser.add_argument("--idle-timeout-seconds", type=int, default=DEFAULT_IDLE_TIMEOUT_SECONDS)
     parser.add_argument("--run-id", default=None)
@@ -236,6 +238,7 @@ def write_summary_markdown(path: Path, summary: dict[str, Any]) -> None:
         f"- Contexts: `{summary['contexts']}`",
         f"- Runs per model/context: `{summary['runs']}`",
         f"- Max output tokens: `{summary['max_output_tokens']}`",
+        f"- Temperature: `{summary['temperature']}`",
         f"- Confidence level: `{summary['confidence_level']}`",
         f"- Prompt: `{summary['prompt']}`",
         f"- TPS formula: `completion_tokens / output_token_times_seconds[-1]`",
@@ -340,6 +343,7 @@ def main() -> int:
         "contexts": args.contexts,
         "runs": args.runs,
         "max_output_tokens": args.max_output_tokens,
+        "temperature": args.temperature,
         "confidence_level": DEFAULT_CONFIDENCE_LEVEL,
         "compact_output_timing": True,
         "capture_memory": False,
@@ -380,6 +384,7 @@ def main() -> int:
                     prompt=args.prompt,
                     snapshot_interval_seconds=DEFAULT_SNAPSHOT_INTERVAL_SECONDS,
                     idle_timeout_seconds=args.idle_timeout_seconds,
+                    temperature=args.temperature,
                     capture_memory=False,
                     max_output_tokens=args.max_output_tokens,
                     speed_runs=args.runs,

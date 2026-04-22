@@ -450,6 +450,7 @@ def _stream_chat(
     model_key: str,
     context_length: int,
     prompt: str,
+    temperature: float = 0.0,
     idle_timeout_seconds: int,
     max_output_tokens: int | None = None,
     compact_output_timing: bool = False,
@@ -459,7 +460,7 @@ def _stream_chat(
     payload = {
         "model": model_key,
         "input": prompt,
-        "temperature": 0.0,
+        "temperature": temperature,
         "store": False,
         "stream": True,
         "context_length": context_length,
@@ -615,6 +616,7 @@ def _stream_chat(
         "wall_time_seconds": ended_perf - started_perf,
         "model": model_key,
         "prompt": prompt,
+        "temperature": temperature,
         "message_preview": message_text[:500],
         "reasoning_preview": reasoning_text[:500],
         "output_chars": output_chars,
@@ -713,13 +715,16 @@ def run_generation_perf_pair(
     prompt: str,
     snapshot_interval_seconds: int,
     idle_timeout_seconds: int,
+    temperature: float = 0.0,
     capture_memory: bool = True,
     max_output_tokens: int | None = None,
     speed_runs: int = 1,
     compact_output_timing: bool = False,
 ) -> dict[str, Any]:
-    if speed_runs < 1:
-        raise ValueError("speed_runs must be at least 1")
+    if speed_runs < 0:
+        raise ValueError("speed_runs must be non-negative")
+    if speed_runs == 0 and not capture_memory:
+        raise ValueError("speed_runs must be at least 1 when memory capture is disabled")
 
     unload_before = unload_all_models(base_url)
     result: dict[str, Any] | None = None
@@ -733,12 +738,25 @@ def run_generation_perf_pair(
                     model_key=model_key,
                     context_length=context_length,
                     prompt=prompt,
+                    temperature=temperature,
                     idle_timeout_seconds=idle_timeout_seconds,
                     max_output_tokens=max_output_tokens,
                     compact_output_timing=compact_output_timing,
                 )
             )
-        run_one = speed_run_rows[0]
+        run_one = speed_run_rows[0] if speed_run_rows else {
+            "status": "skipped",
+            "reason": "speed_runs_disabled",
+            "started_at": None,
+            "ended_at": None,
+            "wall_time_seconds": None,
+            "usage": {},
+            "event_counts": {},
+            "output_chars": 0,
+            "message_chars": 0,
+            "reasoning_chars": 0,
+            "observed_first_output_seconds": None,
+        }
         pid: int | None = None
         memory_snapshots: list[dict[str, Any]] = []
 
@@ -763,6 +781,7 @@ def run_generation_perf_pair(
                     model_key=model_key,
                     context_length=context_length,
                     prompt=prompt,
+                    temperature=temperature,
                     idle_timeout_seconds=idle_timeout_seconds,
                     max_output_tokens=max_output_tokens,
                     compact_output_timing=compact_output_timing,
@@ -795,6 +814,7 @@ def run_generation_perf_pair(
             "model": model_key,
             "context_length": context_length,
             "prompt": prompt,
+            "temperature": temperature,
             "snapshot_interval_seconds": snapshot_interval_seconds,
             "capture_memory": capture_memory,
             "speed_runs_requested": speed_runs,

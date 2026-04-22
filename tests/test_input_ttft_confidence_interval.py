@@ -44,6 +44,34 @@ class InputTtftConfidenceIntervalTests(unittest.TestCase):
 
         self.assertEqual(result.name, "Long.swift")
 
+    def test_build_prompt_prepends_prefix_before_instruction(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "Source.swift"
+            path.write_text("let value = 1", encoding="utf-8")
+
+            prompt = input_ttft.build_prompt(path, prompt_prefix="Z\n")
+
+        self.assertTrue(prompt.startswith("Z\nRead the Swift source file below."))
+        self.assertIn("let value = 1", prompt)
+
+    def test_prompt_prefix_for_run_uses_upper_then_lower_sequence(self) -> None:
+        self.assertEqual(input_ttft.prompt_prefix_for_run(1), "A\n")
+        self.assertEqual(input_ttft.prompt_prefix_for_run(26), "Z\n")
+        self.assertEqual(input_ttft.prompt_prefix_for_run(27), "a\n")
+        self.assertEqual(input_ttft.prompt_prefix_for_run(52), "z\n")
+        self.assertEqual(input_ttft.prompt_prefix_for_run(53), "A\n")
+        self.assertEqual(input_ttft.prompt_prefix_for_run(1, enabled=False), "")
+
+    def test_prefix_sequence_warning_when_runs_exceed_sequence(self) -> None:
+        warning = input_ttft.prefix_sequence_warning(53)
+
+        self.assertIsNotNone(warning)
+        assert warning is not None
+        self.assertEqual(warning["warning"], "prefix_sequence_reuse")
+        self.assertEqual(warning["unique_prefixes"], 52)
+        self.assertIsNone(input_ttft.prefix_sequence_warning(52))
+        self.assertIsNone(input_ttft.prefix_sequence_warning(53, enabled=False))
+
     def test_approximate_input_tps_samples_uses_prompt_tokens_over_ttft(self) -> None:
         rows = [
             {"usage": {"prompt_tokens": 100, "time_to_first_token_seconds": 2.0}},

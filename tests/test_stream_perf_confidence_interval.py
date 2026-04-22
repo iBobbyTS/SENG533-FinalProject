@@ -17,6 +17,7 @@ SPEC.loader.exec_module(stream_perf_ci)
 class StreamPerfConfidenceIntervalTests(unittest.TestCase):
     def test_default_run_configuration_matches_current_batch_plan(self) -> None:
         self.assertEqual(stream_perf_ci.DEFAULT_MAX_OUTPUT_TOKENS, 32768)
+        self.assertEqual(stream_perf_ci.DEFAULT_TEMPERATURE, 0.0)
         self.assertNotIn("qwen3.5-27b@q8_0", stream_perf_ci.DEFAULT_MODELS)
 
     def test_confidence_interval_uses_student_t_for_five_samples(self) -> None:

@@ -11,4 +11,5 @@ data/
 external/
 results/
 screenshots/
-
+.agent/
+.skill/
