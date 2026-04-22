@@ -193,6 +193,7 @@ Auxiliary data:
                 model_key="remote-model",
                 context_length=4096,
                 prompt="loop",
+                temperature=0.1,
                 snapshot_interval_seconds=60,
                 idle_timeout_seconds=600,
                 capture_memory=False,
@@ -246,6 +247,7 @@ Auxiliary data:
                 model_key="remote-model",
                 context_length=4096,
                 prompt="loop",
+                temperature=0.1,
                 snapshot_interval_seconds=60,
                 idle_timeout_seconds=600,
                 capture_memory=False,
@@ -254,10 +256,70 @@ Auxiliary data:
             )
 
         self.assertEqual(stream_mock.call_count, 3)
+        for call in stream_mock.call_args_list:
+            self.assertEqual(call.kwargs["temperature"], 0.1)
         self.assertEqual(len(result["speed_runs"]), 3)
         self.assertTrue(result["compact_output_timing"])
         self.assertEqual(result["speed_runs_requested"], 3)
         self.assertEqual(result["first_run_full_stats"], result["speed_runs"][0])
+        self.assertEqual(result["temperature"], 0.1)
+
+    def test_run_generation_perf_pair_supports_memory_only_run(self) -> None:
+        load_record = {
+            "model": "remote-model",
+            "context_length": 4096,
+            "load_duration_seconds": 1.23,
+            "strategy": "models_load",
+            "response": {"instance_id": "remote-model"},
+        }
+        memory_run = {
+            "status": "completed",
+            "started_at": "2026-04-03T00:00:00+00:00",
+            "ended_at": "2026-04-03T00:00:05+00:00",
+            "wall_time_seconds": 5.0,
+            "usage": {"completion_tokens": 128},
+            "event_counts": {"chat.end": 1},
+            "output_chars": 512,
+            "message_chars": 512,
+            "reasoning_chars": 0,
+            "observed_first_output_seconds": 0.5,
+        }
+
+        class FinishedThread:
+            def join(self, timeout: float | None = None) -> None:
+                return None
+
+        with (
+            patch("benchmark_suite.model_stream_perf.unload_all_models", side_effect=[[], []]),
+            patch("benchmark_suite.model_stream_perf.load_model_with_timing", return_value=load_record),
+            patch("benchmark_suite.model_stream_perf._stream_chat", return_value=memory_run) as stream_mock,
+            patch("benchmark_suite.model_stream_perf.find_largest_lm_studio_node", return_value={"pid": 123}),
+            patch("benchmark_suite.model_stream_perf.collect_memory_snapshots_during_run", return_value=FinishedThread()),
+            patch(
+                "benchmark_suite.model_stream_perf.collect_memory_snapshot",
+                return_value={"rss_bytes": 1024, "is_final_snapshot": True},
+            ),
+        ):
+            result = run_generation_perf_pair(
+                base_url="http://192.168.31.76:1234/api/v1",
+                model_key="remote-model",
+                context_length=4096,
+                prompt="loop",
+                temperature=0.1,
+                snapshot_interval_seconds=60,
+                idle_timeout_seconds=600,
+                capture_memory=True,
+                speed_runs=0,
+                compact_output_timing=True,
+            )
+
+        self.assertEqual(stream_mock.call_count, 1)
+        self.assertEqual(result["speed_runs"], [])
+        self.assertEqual(result["speed_runs_requested"], 0)
+        self.assertEqual(result["first_run_full_stats"]["status"], "skipped")
+        self.assertEqual(result["first_run_full_stats"]["reason"], "speed_runs_disabled")
+        self.assertEqual(result["second_run_control"]["usage"], {"completion_tokens": 128})
+        self.assertEqual(result["second_run_memory_snapshots"], [{"rss_bytes": 1024, "is_final_snapshot": True}])
 
 
 if __name__ == "__main__":

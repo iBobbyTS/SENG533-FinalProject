@@ -6,6 +6,7 @@ import json
 import math
 import os
 import statistics
+import string
 import sys
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ DEFAULT_RUNS = 5
 DEFAULT_MAX_OUTPUT_TOKENS = 16
 DEFAULT_IDLE_TIMEOUT_SECONDS = 300
 DEFAULT_CONFIDENCE_LEVEL = 0.95
+PREFIX_SEQUENCE = string.ascii_uppercase + string.ascii_lowercase
 DEFAULT_MODELS = [
     "qwen3.5-4b",
     "qwen/qwen3.5-9b",
@@ -92,6 +94,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
     parser.add_argument("--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS)
     parser.add_argument("--idle-timeout-seconds", type=int, default=DEFAULT_IDLE_TIMEOUT_SECONDS)
+    parser.add_argument(
+        "--prefix-sequence",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Prepend A-Z then a-z sequential one-character prefixes plus a newline to each run prompt.",
+    )
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--output-root", type=Path, default=RESULTS_ROOT)
     parser.add_argument("--stop-on-failure", action="store_true")
@@ -112,9 +120,29 @@ def select_longest_file(paths: list[Path]) -> Path:
     return max(paths, key=lambda path: (path.stat().st_size, path.name))
 
 
-def build_prompt(path: Path) -> str:
+def prompt_prefix_for_run(run_index: int, enabled: bool = True) -> str:
+    if run_index < 1:
+        raise ValueError("run_index must be at least 1")
+    if not enabled:
+        return ""
+    return PREFIX_SEQUENCE[(run_index - 1) % len(PREFIX_SEQUENCE)] + "\n"
+
+
+def prefix_sequence_warning(runs: int, enabled: bool = True) -> dict[str, Any] | None:
+    if not enabled or runs <= len(PREFIX_SEQUENCE):
+        return None
+    return {
+        "event": "warning",
+        "warning": "prefix_sequence_reuse",
+        "runs": runs,
+        "unique_prefixes": len(PREFIX_SEQUENCE),
+        "message": "Runs exceed 52; prompt prefix characters will repeat and may allow cache reuse.",
+    }
+
+
+def build_prompt(path: Path, prompt_prefix: str = "") -> str:
     source = path.read_text(encoding="utf-8")
-    return (
+    return prompt_prefix + (
         "Read the Swift source file below. Reply with exactly one short sentence confirming that you read it.\n\n"
         f"File: {path.name}\n"
         "```swift\n"
@@ -356,9 +384,14 @@ def write_summary_markdown(path: Path, summary: dict[str, Any]) -> None:
         f"- Context length: `{summary['context_length']}`",
         f"- Runs per model/file: `{summary['runs']}`",
         f"- Max output tokens: `{summary['max_output_tokens']}`",
+        f"- Prompt prefix sequence enabled: `{summary['prefix_sequence_enabled']}`",
+        f"- Prompt prefix sequence: `{summary['prefix_sequence']}`",
         f"- Confidence level: `{summary['confidence_level']}`",
         f"- TTFT source: `usage.time_to_first_token_seconds - usage.model_load_time_seconds`",
     ]
+    for warning in summary.get("warnings", []):
+        if isinstance(warning, dict) and warning.get("message"):
+            lines.append(f"- Warning: `{warning.get('message')}`")
     input_ttft_plot = summary.get("input_ttft_plot")
     if isinstance(input_ttft_plot, dict):
         if input_ttft_plot.get("status") == "completed":
@@ -432,6 +465,12 @@ def main() -> int:
     if args.runs < 2:
         raise SystemExit("--runs must be at least 2 to compute a confidence interval.")
 
+    warnings: list[dict[str, Any]] = []
+    prefix_warning = prefix_sequence_warning(args.runs, enabled=args.prefix_sequence)
+    if prefix_warning is not None:
+        warnings.append(prefix_warning)
+        print(json.dumps(prefix_warning), flush=True)
+
     input_files = discover_swift_files(args.input_dir)
     longest_file = select_longest_file(input_files)
     targets = resolve_explicit_model_targets(
@@ -453,6 +492,9 @@ def main() -> int:
         "context_length": args.context_length,
         "runs": args.runs,
         "max_output_tokens": args.max_output_tokens,
+        "prefix_sequence": PREFIX_SEQUENCE,
+        "prefix_sequence_enabled": args.prefix_sequence,
+        "warnings": warnings,
         "confidence_level": DEFAULT_CONFIDENCE_LEVEL,
         "targets": [
             {
@@ -500,9 +542,10 @@ def main() -> int:
             model_row["load"] = load_model_with_timing(args.base_url, model_key, args.context_length)
             for input_file in input_files:
                 file_root = model_root / slugify(input_file.stem)
-                prompt = build_prompt(input_file)
                 file_runs: list[dict[str, Any]] = []
                 for run_index in range(1, args.runs + 1):
+                    prompt_prefix = prompt_prefix_for_run(run_index, enabled=args.prefix_sequence)
+                    prompt = build_prompt(input_file, prompt_prefix=prompt_prefix)
                     print(
                         json.dumps(
                             {
@@ -510,6 +553,7 @@ def main() -> int:
                                 "model": model_key,
                                 "file": input_file.name,
                                 "run": run_index,
+                                "prompt_prefix": prompt_prefix.rstrip("\n"),
                             }
                         ),
                         flush=True,
@@ -528,6 +572,7 @@ def main() -> int:
                         "path": str(input_file),
                         "bytes": input_file.stat().st_size,
                     }
+                    run_result["prompt_prefix"] = prompt_prefix
                     run_result["run_index"] = run_index
                     write_json(file_root / f"run{run_index}.json", run_result)
                     file_runs.append(run_result)

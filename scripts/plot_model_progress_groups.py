@@ -23,16 +23,22 @@ import numpy as np  # noqa: E402
 from benchmark_suite.model_progress_grouped_plots import (  # noqa: E402
     BENCHMARK_LABELS,
     BENCHMARK_ORDER,
+    BenchmarkOverride,
+    apply_benchmark_overrides,
     find_row,
+    load_benchmark_overrides,
     load_benchmark_points,
     load_truncation_index,
     parse_model_progress_markdown,
+    resolve_summary_path,
     transpose_group_series,
 )
 
 DEFAULT_MODEL_PROGRESS = PROJECT_ROOT / "results" / "20260330_model_progress.md"
 DEFAULT_TRUNCATION = PROJECT_ROOT / "results" / "20260330_model_progress_truncation.json"
-DEFAULT_OUT_DIR = PROJECT_ROOT / "results" / "20260330_model_progress_grouped_plots"
+DEFAULT_OUT_DIR = PROJECT_ROOT / "results" / "inteligence_benchmark" / "grouped_plots"
+DEFAULT_BENCHMARK_OVERRIDES = DEFAULT_OUT_DIR / "benchmark_overrides.json"
+DEFAULT_SUMMARY_SEARCH_ROOTS = [PROJECT_ROOT / "results" / "inteligence_benchmark"]
 
 GROUPS = [
     (
@@ -87,17 +93,47 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-progress", type=Path, default=DEFAULT_MODEL_PROGRESS)
     parser.add_argument("--truncation", type=Path, default=DEFAULT_TRUNCATION)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
+    parser.add_argument(
+        "--benchmark-overrides",
+        type=Path,
+        default=DEFAULT_BENCHMARK_OVERRIDES,
+        help="Optional JSON file with single-benchmark rerun summaries to use instead of the aggregate summary entry.",
+    )
+    parser.add_argument(
+        "--summary-search-root",
+        type=Path,
+        action="append",
+        help="Directory to search when model progress summary links point to moved result folders.",
+    )
     return parser.parse_args()
 
 
-def write_readme(out_dir: Path, files: list[tuple[str, str]]) -> None:
+def write_readme(
+    out_dir: Path,
+    files: list[tuple[str, str]],
+    model_progress: Path,
+    truncation: Path,
+    overrides_path: Path,
+    overrides: dict[tuple[str, str, str, str], BenchmarkOverride],
+) -> None:
     lines = [
         "# Grouped Benchmark Score Plots",
         "",
-        f"Source progress file: `{DEFAULT_MODEL_PROGRESS}`",
-        f"Source truncation file: `{DEFAULT_TRUNCATION}`",
-        "",
+        f"Source progress file: `{model_progress}`",
+        f"Source truncation file: `{truncation}`",
     ]
+    if overrides:
+        lines.extend(
+            [
+                f"Benchmark override file: `{overrides_path}`",
+                "",
+                "Applied benchmark overrides:",
+            ]
+        )
+        for override in overrides.values():
+            model = f"{override.params} {override.quantization}"
+            lines.append(f"- `{model}` `{override.benchmark}`: `{override.summary_path}`")
+    lines.append("")
     for title, filename in files:
         lines.append(f"- `{filename}`: {title}")
     (out_dir / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -185,6 +221,8 @@ def main() -> int:
     args = parse_args()
     rows = parse_model_progress_markdown(args.model_progress)
     truncation_index = load_truncation_index(args.truncation)
+    overrides = load_benchmark_overrides(args.benchmark_overrides)
+    search_roots = args.summary_search_root or DEFAULT_SUMMARY_SEARCH_ROOTS
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     written: list[tuple[str, str]] = []
@@ -192,14 +230,16 @@ def main() -> int:
         series: list[tuple[str, dict]] = []
         for label, params, quantization, notes in model_specs:
             row = find_row(rows, params, quantization, notes)
-            points = load_benchmark_points(row.summary_path, truncation_index)
+            summary_path = resolve_summary_path(row.summary_path, search_roots)
+            points = load_benchmark_points(summary_path, truncation_index, truncation_summary_path=row.summary_path)
+            points = apply_benchmark_overrides(row, points, overrides, truncation_index)
             series.append((label, points))
         out_path = args.out_dir / f"{slug}.png"
         plot_group(title, out_path, series)
         written.append((title, out_path.name))
         print(out_path)
 
-    write_readme(args.out_dir, written)
+    write_readme(args.out_dir, written, args.model_progress, args.truncation, args.benchmark_overrides, overrides)
     return 0
 
 
